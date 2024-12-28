@@ -18,46 +18,61 @@ def test_sqlaclhemy_models_caching(postgres_fx, redis_fx):
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
-    db_session = sessionmaker(
-        engine, expire_on_commit=False
-    )()
+    with sessionmaker(engine, expire_on_commit=False)() as db_session:
+        sprint = Sprint(
+            id=uuid.uuid4(),
+            title="sprint"
+        )
+        db_session.add(sprint)
 
-    sprint = Sprint(
-        id=uuid.uuid4(),
-        title="sprint"
-    )
-    db_session.add(sprint)
+        task1 = Task(
+            id=uuid.uuid4(),
+            title="task 1",
+            sprint=sprint
 
-    task1 = Task(
-        id=uuid.uuid4(),
-        title="task 1",
-        sprint=sprint
+        )
+        db_session.add(task1)
+        task1_id = task1.id
 
-    )
-    db_session.add(task1)
-    task1_id = task1.id
+        task2 = Task(
+            id=uuid.uuid4(),
+            title="task 2",
+            sprint=sprint
 
-    task2 = Task(
-        id=uuid.uuid4(),
-        title="task 2",
-        sprint=sprint
+        )
+        db_session.add(task2)
 
-    )
-    db_session.add(task2)
+        db_session.commit()
 
-    db_session.commit()
+        tasks_cache_manager = CacheManager(
+            redis=redis_fx,
+            model_version=Task.__model_version__,
+            prefix=Task.__tablename__
+        )
 
-    tasks_cache_manager = CacheManager(
-        redis=redis_fx,
-        model_version=Task.__model_version__,
-        prefix=Task.__tablename__
-    )
+        tasks_cache_manager.set(obj=task1, obj_id=task1.id, ttl=60)
 
-    tasks_cache_manager.set(obj=task1, obj_id=task1.id, ttl=60)
+        task: Task = tasks_cache_manager.get(obj_id=task1.id, model_class=Task)
+        task = db_session.merge(task)
 
-    task: Task = tasks_cache_manager.get(obj_id=task1.id, model_class=Task)
+        assert task
+        assert task.id == task1_id
+        assert task.sprint.id == sprint.id
+        assert task.sprint.title == sprint.title
 
-    assert task
-    assert task.id == task1_id
-    assert task.sprint.id == sprint.id
-    assert task.sprint.title == sprint.title
+        task.title = "updated title"
+
+        db_session.commit()
+
+        task = db_session.query(Task).where(
+            Task.id == task.id
+        ).one_or_none()
+        assert task
+
+        assert task.title == "updated title"
+
+        # setting updated version invalidates prev cache
+        tasks_cache_manager.set(obj=task, obj_id=task.id, ttl=60)
+        task: Task = tasks_cache_manager.get(obj_id=task1.id, model_class=Task)
+
+        assert task.title == "updated title"
