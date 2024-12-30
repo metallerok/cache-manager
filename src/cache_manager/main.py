@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import pickle
 from redis import Redis
 from sqlalchemy.orm import class_mapper, RelationshipProperty
@@ -43,7 +43,7 @@ class CacheManager:
 
         return pickle.dumps(obj_dict)
 
-    def _deserialize(self, serialized_obj, model_class) -> Dict:
+    def _deserialize(self, serialized_obj, model_class) -> Optional[Dict]:
         obj_dict = pickle.loads(serialized_obj)
 
         mapper = class_mapper(model_class)
@@ -53,7 +53,12 @@ class CacheManager:
                     related_model_class = prop.mapper.class_
                     obj_dict[prop.key] = self._deserialize(obj_dict[prop.key], related_model_class)
 
-        return model_class(**obj_dict)
+        try:
+            result = model_class(**obj_dict)
+        except TypeError:
+            result = None
+
+        return result
 
     def set(self, obj_id, obj, ttl=3600):
         version = self._get_version(obj_id)
